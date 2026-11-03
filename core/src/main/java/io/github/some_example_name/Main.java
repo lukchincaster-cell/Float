@@ -32,7 +32,17 @@ public class Main extends ApplicationAdapter {
         WAITING,   // รอปลากิน
         BITE,      // ปลากินเบ็ด! (ต้องกดทัน)
         FIGHTING,  // มินิเกมสู้กับปลา
-        REELING    // ดึงปลาขึ้นมา
+        REELING,   // ดึงปลาขึ้นมา
+        SHOP,      // ร้านค้าที่ท่าเรือ
+        ENDING     // จบเกม (ซื้อตั๋วแล้ว)
+    }
+
+    // ปลาที่ว่ายอยู่ในน้ำ (ตกแต่งฉาก)
+    class SwimFish {
+        int type;          // 0..2 ตรงกับ fishRegions
+        float x, y;
+        float speed;       // ความเร็ว (ติดลบ = ว่ายไปซ้าย)
+        float phase;       // ใช้โยกขึ้นลงไม่ให้ทุกตัวโยกพร้อมกัน
     }
 
     SpriteBatch batch;
@@ -55,15 +65,25 @@ public class Main extends ApplicationAdapter {
     Animation<TextureRegion> waitAnim;
     Animation<TextureRegion> reelAnim;
 
+    // ภาพท่าเหวี่ยง/ท่ารอของเบ็ดแต่ละอัน (index = ระดับเบ็ด 0..3 ถ้าไม่มีไฟล์จะใช้ของเบ็ดเริ่มต้นแทน)
+    ArrayList<Animation<TextureRegion>> castSkins = new ArrayList<>();
+    ArrayList<Animation<TextureRegion>> waitSkins = new ArrayList<>();
+    ArrayList<Animation<TextureRegion>> reelSkins = new ArrayList<>();
+
     // รูปปลา (ตัดขอบโปร่งใสออกแล้ว)
     TextureRegion[] fishRegions = new TextureRegion[3];
+
+    // ปลาที่ว่ายในน้ำ
+    ArrayList<SwimFish> swimFish = new ArrayList<>();
 
     // เก็บ texture ไว้ dispose ตอนปิดเกม
     ArrayList<Texture> extraTextures = new ArrayList<>();
 
     // เสียง
-    Sound castSound, biteSound, catchSound, fightSound, sellSound;
+    Sound castSound, biteSound, catchSound, fightSound, sellSound, engineSound;
     long fightSoundId = -1;
+    long engineSoundId = -1;
+    float engineDelayTimer = 0;
     Music bgm;
 
     // หน้าเริ่มเกม
@@ -124,6 +144,43 @@ public class Main extends ApplicationAdapter {
     final float PROGRESS_GAIN = 0.30f;   // เพิ่มต่อวินาทีตอนปลาอยู่ในโซน
     final float PROGRESS_LOSS = 0.20f;   // ลดต่อวินาทีตอนปลาหลุดโซน
 
+    // ===== ปลาว่ายในน้ำ =====
+    final int SWIM_FISH_COUNT = 8;        // จำนวนปลาในน้ำ
+    final float WATER_MIN_Y = 20;         // ขอบล่างของโซนน้ำ (ปรับให้ตรงกับภาพ)
+    final float WATER_MAX_Y = 100;        // ขอบบนของโซนน้ำ (ต้องต่ำกว่าผิวน้ำ)
+    final float SWIM_SPEED_MIN = 10;
+    final float SWIM_SPEED_MAX = 30;
+    final float SWIM_FISH_SCALE = 0.6f;   // ย่อขนาดปลาให้เล็กลง
+    // เสียงเครื่องยนต์
+    final float ENGINE_VOLUME = 0.2f;   // ความดัง 0.0 - 1.0
+    final float ENGINE_DELAY = 0.25f;   // หน่วงก่อนเสียงเริ่มดัง (วินาที)
+
+    final float SWIM_BOB = 3f;            // ความสูงที่โยกขึ้นลง
+    // ทิศของรูปปลาแต่ละตัว {fish1, fish2, fish3}: true = รูปหันไปทางขวา, false = หันไปทางซ้าย
+    final boolean[] FISH_FACES_RIGHT = {true, true, false};
+
+    // ===== ร้านค้า =====
+    final String[] ROD_NAMES = {"Old Rod", "Bamboo Rod", "Carbon Rod", "Golden Rod"};
+    final int[] ROD_PRICES = {0, 40, 120, 300};
+    // ขนาดโซนสีเขียวในมินิเกม (คูณ) ยิ่งมากยิ่งจับง่าย
+    final float[] ROD_ZONE_MULT = {1.0f, 1.25f, 1.5f, 1.8f};
+    // เวลารอปลากิน (คูณ) ยิ่งน้อยยิ่งกินเร็ว
+    final float[] ROD_WAIT_MULT = {1.0f, 0.85f, 0.7f, 0.55f};
+    // โอกาสเจอปลาหายากเพิ่มขึ้น (บวกเข้ากับโอกาสเจอปลาตัวใหญ่ 10%)
+    final float[] ROD_LUCK = {0f, 0.05f, 0.10f, 0.15f};
+    // ราคาปลาที่จับได้ (คูณ) เบ็ดดีขึ้นขายได้แพงขึ้น
+    final float[] ROD_SELL_MULT = {1.0f, 1.25f, 1.5f, 2.0f};
+    final String[] ROD_DESC = {
+        "Your starter rod.",
+        "Wider zone, faster bites. Fish sell for +25%.",
+        "Wider zone, faster bites, rare fish. Fish sell for +50%.",
+        "The best rod in every way. Fish sell for double!"
+    };
+
+    final int TICKET_PRICE = 600;                 // ราคาตั๋ว (จุดจบของเกม)
+    final int TICKET_INDEX = ROD_NAMES.length;    // ช่องสุดท้ายในร้านคือตั๋ว
+    final String TICKET_DESC = "A trip to a faraway fishing spot. This ends your journey.";
+
     // โซนท่าเรือสำหรับขายปลา: ถ้ากลางเรืออยู่ซ้ายกว่าค่านี้ กด E เพื่อขาย
     // (ปรับให้ตรงกับตำแหน่งที่ท่าเรือใน dock.png สิ้นสุดจริง)
     final float DOCK_MAX_X = 150;
@@ -157,6 +214,12 @@ public class Main extends ApplicationAdapter {
     int fishCount = 0;
     int fishValue = 0;
     int money = 0;
+    int totalCaught = 0;
+
+    // ร้านค้า
+    int rodLevel = 0;                                         // เบ็ดที่ใช้อยู่
+    boolean[] rodOwned = {true, false, false, false};         // เบ็ดที่ซื้อแล้ว
+    int shopCursor = 0;                                       // ตัวเลือกที่ชี้อยู่ในร้าน
 
     // ปลาที่เพิ่งจับได้ (โชว์เหนือหัวสักพัก)
     int caughtFishId = -1;
@@ -205,9 +268,20 @@ public class Main extends ApplicationAdapter {
         // ท่าดึงปลาขึ้น = เล่นท่าเหวี่ยงเบ็ดย้อนกลับ
         reelAnim = loadAnimation("player_cast.png", CAST_FRAMES, REEL_FRAME_TIME, Animation.PlayMode.REVERSED);
 
+        // โหลดภาพตัวละครของเบ็ดแต่ละสี
+        loadRodSkins();
+
         // โหลดรูปปลา
         for (int i = 0; i < 3; i++) {
             fishRegions[i] = loadCroppedRegion("fish" + (i + 1) + ".png");
+        }
+
+        // สร้างปลาที่ว่ายในน้ำ
+        for (int i = 0; i < SWIM_FISH_COUNT; i++) {
+            SwimFish f = createSwimFish(-1);
+            f.type = i % 3;              // บังคับให้มีครบทุกชนิด
+            f.y = randomDepth(f.type);
+            swimFish.add(f);
         }
 
         // โหลดโลโก้หน้าเริ่มเกม (ถ้ามีไฟล์ title.png)
@@ -222,6 +296,7 @@ public class Main extends ApplicationAdapter {
         catchSound = loadSound("catch");
         fightSound = loadSound("fight");
         sellSound = loadSound("sell");
+        engineSound = loadSound("engine");
 
         FileHandle bgmFile = findAudio("bgm");
         if (bgmFile != null) {
@@ -252,9 +327,7 @@ public class Main extends ApplicationAdapter {
         }
 
         // เริ่มเกมให้เรืออยู่ทางซ้าย (ตรงท่าเรือ)
-        float boatCenter = (boatLeft + boatRight) / 2f;
-        boatX = DOCK_MAX_X / 2f - boatCenter;
-        boatX = clampBoat(boatX);
+        placeBoatAtDock();
 
         camera = new OrthographicCamera();
         viewport = new FitViewport(WORLD_WIDTH, WORLD_HEIGHT, camera);
@@ -315,6 +388,51 @@ public class Main extends ApplicationAdapter {
         Animation<TextureRegion> anim = new Animation<>(frameTime, keyFrames);
         anim.setPlayMode(mode);
         return anim;
+    }
+
+    // โหลดภาพตัวละครของเบ็ดอันที่ 1..3 ตามชื่อไฟล์:
+    //   player_cast_rod1.png (3 เฟรม), player_wait_rod1.png (1 เฟรม) (และ rod2, rod3)
+    // ถ้าไม่มีไฟล์ จะใช้ภาพของเบ็ดเริ่มต้นแทน
+    private void loadRodSkins() {
+
+        castSkins.add(castAnim);
+        waitSkins.add(waitAnim);
+        reelSkins.add(reelAnim);
+
+        for (int i = 1; i < ROD_NAMES.length; i++) {
+            String tag = "_rod" + i + ".png";
+
+            castSkins.add(loadSkinAnim("player_cast" + tag, castAnim, CAST_FRAMES, CAST_FRAME_TIME, Animation.PlayMode.NORMAL));
+            waitSkins.add(loadSkinAnim("player_wait" + tag, waitAnim, WAIT_FRAMES, WAIT_FRAME_TIME, Animation.PlayMode.LOOP));
+            reelSkins.add(loadSkinAnim("player_cast" + tag, reelAnim, CAST_FRAMES, REEL_FRAME_TIME, Animation.PlayMode.REVERSED));
+        }
+    }
+
+    private Animation<TextureRegion> loadSkinAnim(String file, Animation<TextureRegion> base,
+                                                  int frames, float frameTime, Animation.PlayMode mode) {
+        if (!Gdx.files.internal(file).exists()) return base;
+        return loadAnimation(file, frames, frameTime, mode);
+    }
+
+    // เปิด/ปิดเสียงเครื่องยนต์ (เล่นวนซ้ำตอนเรือเคลื่อนที่)
+    private void setEngine(boolean on) {
+        if (engineSound == null) return;
+
+        if (on) {
+            if (engineSoundId == -1) {
+                // รอให้เรือขยับครบเวลา delay ก่อน เสียงถึงจะเริ่ม
+                engineDelayTimer += Gdx.graphics.getDeltaTime();
+                if (engineDelayTimer >= ENGINE_DELAY) {
+                    engineSoundId = engineSound.loop(ENGINE_VOLUME);
+                }
+            }
+        } else {
+            engineDelayTimer = 0;
+            if (engineSoundId != -1) {
+                engineSound.stop(engineSoundId);
+                engineSoundId = -1;
+            }
+        }
     }
 
     // โหลดรูปแล้วตัดขอบโปร่งใสออก (ใช้กับรูปปลา)
@@ -380,6 +498,9 @@ public class Main extends ApplicationAdapter {
     // เปลี่ยนสถานะ และรีเซ็ตเวลาของ animation
     private void setState(State newState) {
 
+        // เปลี่ยนสถานะทีไร ปิดเสียงเครื่องยนต์ก่อน (ถ้ายังขับอยู่ SAILING จะเปิดใหม่เอง)
+        setEngine(false);
+
         // ออกจากมินิเกม (ชนะหรือแพ้) หยุดเสียงสู้ปลา
         if (state == State.FIGHTING && newState != State.FIGHTING) {
             if (fightSound != null && fightSoundId != -1) {
@@ -402,12 +523,148 @@ public class Main extends ApplicationAdapter {
         messageTimer = 2f;
     }
 
-    // สุ่มปลา (ปลาแพงหายากกว่า)
-    private int randomFish() {
+    // สุ่มปลา (ปลาแพงหายากกว่า) luck = โอกาสเจอปลาหายากที่เพิ่มขึ้น
+    private int pickFish(float luck) {
         float r = MathUtils.random();
-        if (r < 0.6f) return 0;
-        if (r < 0.9f) return 1;
-        return 2;
+        float rare = 0.10f + luck;
+        float mid = 0.30f;
+        if (r < rare) return 2;
+        if (r < rare + mid) return 1;
+        return 0;
+    }
+
+    // สุ่มปลาตอนตกปลา (ขึ้นกับเบ็ดที่ใช้)
+    private int randomFish() {
+        return pickFish(ROD_LUCK[rodLevel]);
+    }
+
+    // ปลาตัวแพงว่ายลึกกว่า
+    private float randomDepth(int type) {
+        float range = WATER_MAX_Y - WATER_MIN_Y;
+        if (type == 2) return MathUtils.random(WATER_MIN_Y, WATER_MIN_Y + range * 0.4f);
+        if (type == 1) return MathUtils.random(WATER_MIN_Y + range * 0.2f, WATER_MIN_Y + range * 0.7f);
+        return MathUtils.random(WATER_MIN_Y + range * 0.5f, WATER_MAX_Y);
+    }
+
+    // สร้างปลาว่ายน้ำ 1 ตัว (startX < 0 แปลว่าสุ่มตำแหน่งทั่วฉาก)
+    private SwimFish createSwimFish(float startX) {
+        SwimFish f = new SwimFish();
+
+        f.type = pickFish(0);
+
+        f.y = randomDepth(f.type);
+        f.speed = MathUtils.random(SWIM_SPEED_MIN, SWIM_SPEED_MAX);
+        if (MathUtils.randomBoolean()) f.speed = -f.speed;
+        f.phase = MathUtils.random(0f, MathUtils.PI2);
+
+        f.x = (startX >= 0) ? startX : MathUtils.random(0, background.getWidth());
+        return f;
+    }
+
+    private void updateSwimFish(float delta) {
+        float worldW = background.getWidth();
+
+        for (SwimFish f : swimFish) {
+            f.x += f.speed * delta;
+
+            TextureRegion r = fishRegions[f.type];
+            float w = r.getRegionWidth() * SWIM_FISH_SCALE;
+
+            // ว่ายพ้นขอบแล้วโผล่อีกฝั่ง พร้อมสุ่มความลึกใหม่
+            if (f.speed > 0 && f.x > worldW + w) {
+                f.x = -w;
+                f.y = randomDepth(f.type);
+            } else if (f.speed < 0 && f.x < -w) {
+                f.x = worldW + w;
+                f.y = randomDepth(f.type);
+            }
+        }
+    }
+
+    private void drawSwimFish() {
+        // ทำให้ปลาดูจางลงนิดหน่อยเหมือนอยู่ใต้น้ำ
+        batch.setColor(1f, 1f, 1f, 0.75f);
+
+        for (SwimFish f : swimFish) {
+            TextureRegion r = fishRegions[f.type];
+            float w = r.getRegionWidth() * SWIM_FISH_SCALE;
+            float h = r.getRegionHeight() * SWIM_FISH_SCALE;
+            float y = f.y + MathUtils.sin(time * 2f + f.phase) * SWIM_BOB;
+
+            // ถ้ารูปปลาที่วาดไว้หันไปทางซ้าย ให้เปลี่ยนเป็น f.speed < 0
+            boolean goingRight = (f.speed > 0) == FISH_FACES_RIGHT[f.type];
+            if (goingRight) {
+                batch.draw(r, f.x, y, w, h);
+            } else {
+                batch.draw(r, f.x + w, y, -w, h);
+            }
+        }
+
+        batch.setColor(Color.WHITE);
+    }
+
+    // วางเรือไว้ที่ท่าเรือ
+    private void placeBoatAtDock() {
+        float boatCenter = (boatLeft + boatRight) / 2f;
+        boatX = clampBoat(DOCK_MAX_X / 2f - boatCenter);
+        facingRight = true;
+    }
+
+    // เริ่มเกมใหม่ทั้งหมด (หลังจบเกม)
+    private void resetGame() {
+        money = 0;
+        fishCount = 0;
+        fishValue = 0;
+        totalCaught = 0;
+        rodLevel = 0;
+        rodOwned = new boolean[] {true, false, false, false};
+        shopCursor = 0;
+        caughtFishId = -1;
+        caughtTimer = 0;
+        message = "";
+        messageTimer = 0;
+        placeBoatAtDock();
+        setState(State.MENU);
+    }
+
+    // ราคาปลาจริง (ขึ้นกับเบ็ดที่ใช้ตอนจับ)
+    private int fishPrice(int fishId) {
+        return Math.round(FISH_PRICES[fishId] * ROD_SELL_MULT[rodLevel]);
+    }
+
+    // ขนาดโซนสีเขียวจริง (ขึ้นกับปลาและเบ็ด)
+    private float zoneSizeFor(int fishId) {
+        return Math.min(0.6f, ZONE_SIZE[fishId] * ROD_ZONE_MULT[rodLevel]);
+    }
+
+    // กดเลือกในร้าน: ซื้อ / เปลี่ยนเบ็ด / ซื้อตั๋ว
+    private void buyOrEquip() {
+
+        if (shopCursor == TICKET_INDEX) {
+            if (money >= TICKET_PRICE) {
+                money -= TICKET_PRICE;
+                play(sellSound);
+                setState(State.ENDING);
+            } else {
+                showMessage("Not enough money");
+            }
+            return;
+        }
+
+        int i = shopCursor;
+
+        if (rodOwned[i]) {
+            rodLevel = i;
+            showMessage("Equipped " + ROD_NAMES[i]);
+        } else if (money >= ROD_PRICES[i]) {
+            money -= ROD_PRICES[i];
+            rodOwned[i] = true;
+            rodLevel = i;
+            play(sellSound);
+            showMessage("Bought " + ROD_NAMES[i] + "!");
+        } else {
+            showMessage("Not enough money");
+        }
     }
 
     // เริ่มมินิเกมสู้ปลา
@@ -426,6 +683,8 @@ public class Main extends ApplicationAdapter {
 
         time += delta;
         stateTime += delta;
+
+        updateSwimFish(delta);
 
         if (messageTimer > 0) {
             messageTimer -= delta;
@@ -446,6 +705,8 @@ public class Main extends ApplicationAdapter {
                 break;
 
             case SAILING:
+                float startX = boatX;
+
                 if (Gdx.input.isKeyPressed(Input.Keys.A) || Gdx.input.isKeyPressed(Input.Keys.LEFT)) {
                     boatX -= speed * delta;
                     facingRight = false;
@@ -455,6 +716,9 @@ public class Main extends ApplicationAdapter {
                     facingRight = true;
                 }
                 boatX = clampBoat(boatX);
+
+                // เสียงเครื่องยนต์: ดังเฉพาะตอนเรือขยับจริง (ชนขอบแล้วไม่ดัง)
+                setEngine(Math.abs(boatX - startX) > 0.001f);
 
                 // ขายปลาที่ท่าเรือ
                 if (atDock() && Gdx.input.isKeyJustPressed(Input.Keys.E)) {
@@ -469,7 +733,11 @@ public class Main extends ApplicationAdapter {
                     }
                 }
 
-                if (spacePressed) {
+                if (atDock() && Gdx.input.isKeyJustPressed(Input.Keys.Q)) {
+                    // เปิดร้านค้า
+                    shopCursor = 0;
+                    setState(State.SHOP);
+                } else if (spacePressed) {
                     play(castSound);
                     setState(State.CASTING);
                 }
@@ -477,8 +745,8 @@ public class Main extends ApplicationAdapter {
 
             case CASTING:
                 // เหวี่ยงเบ็ดจบแล้วไปรอปลา
-                if (castAnim.isAnimationFinished(stateTime)) {
-                    waitTimer = MathUtils.random(WAIT_MIN, WAIT_MAX);
+                if (castSkins.get(rodLevel).isAnimationFinished(stateTime)) {
+                    waitTimer = MathUtils.random(WAIT_MIN, WAIT_MAX) * ROD_WAIT_MULT[rodLevel];
                     setState(State.WAITING);
                 }
                 break;
@@ -516,15 +784,44 @@ public class Main extends ApplicationAdapter {
 
             case REELING:
                 // ดึงปลาขึ้นมาจบแล้วได้ปลา
-                if (reelAnim.isAnimationFinished(stateTime)) {
+                if (reelSkins.get(rodLevel).isAnimationFinished(stateTime)) {
                     int id = currentFishId;
                     fishCount++;
-                    fishValue += FISH_PRICES[id];
+                    totalCaught++;
+                    fishValue += fishPrice(id);
                     caughtFishId = id;
                     caughtTimer = 2f;
-                    showMessage("Caught " + FISH_NAMES[id] + "! ($" + FISH_PRICES[id] + ")");
+                    showMessage("Caught " + FISH_NAMES[id] + "! ($" + fishPrice(id) + ")");
                     play(catchSound);
                     setState(State.SAILING);
+                }
+                break;
+
+            case SHOP:
+                int itemCount = TICKET_INDEX + 1;
+
+                if (Gdx.input.isKeyJustPressed(Input.Keys.W) || Gdx.input.isKeyJustPressed(Input.Keys.UP)) {
+                    shopCursor = (shopCursor - 1 + itemCount) % itemCount;
+                }
+                if (Gdx.input.isKeyJustPressed(Input.Keys.S) || Gdx.input.isKeyJustPressed(Input.Keys.DOWN)) {
+                    shopCursor = (shopCursor + 1) % itemCount;
+                }
+                if (spacePressed || Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
+                    buyOrEquip();
+                }
+                if (Gdx.input.isKeyJustPressed(Input.Keys.Q) || Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+                    setState(State.SAILING);
+                }
+                break;
+
+            case ENDING:
+                // เรือแล่นออกจากท่าไป แล้วจอค่อยๆ มืด
+                boatX += 70 * delta;
+                setEngine(stateTime < 4.5f);
+                facingRight = true;
+
+                if (stateTime > 6f && (spacePressed || Gdx.input.isKeyJustPressed(Input.Keys.ENTER))) {
+                    resetGame();
                 }
                 break;
         }
@@ -533,7 +830,7 @@ public class Main extends ApplicationAdapter {
     // ลอจิกมินิเกมสู้ปลา: กดค้าง SPACE ให้โซนสีเขียวลอยขึ้น ปล่อยให้จมลง
     private void updateFight(float delta) {
 
-        float zoneSize = ZONE_SIZE[currentFishId];
+        float zoneSize = zoneSizeFor(currentFishId);
 
         // ---- โซนสีเขียว ----
         boolean holding = Gdx.input.isKeyPressed(Input.Keys.SPACE);
@@ -589,13 +886,13 @@ public class Main extends ApplicationAdapter {
     private TextureRegion getPlayerFrame() {
         switch (state) {
             case CASTING:
-                return castAnim.getKeyFrame(stateTime);
+                return castSkins.get(rodLevel).getKeyFrame(stateTime);
             case WAITING:
             case BITE:
             case FIGHTING:
-                return waitAnim.getKeyFrame(stateTime);
+                return waitSkins.get(rodLevel).getKeyFrame(stateTime);
             case REELING:
-                return reelAnim.getKeyFrame(stateTime);
+                return reelSkins.get(rodLevel).getKeyFrame(stateTime);
             default:
                 return playerIdle;
         }
@@ -670,6 +967,96 @@ public class Main extends ApplicationAdapter {
         drawCentered("A/D: move   SPACE: cast   E: sell at the dock", cx, 28, 0.5f, Color.WHITE);
     }
 
+    // ร้านค้า
+    private void drawShop() {
+
+        float cx = camera.position.x;
+
+        float panelW = 340;
+        float panelH = 225;
+        float px = cx - panelW / 2f;
+        float py = (WORLD_HEIGHT - panelH) / 2f;
+
+        // ม่านดำ + กรอบร้าน
+        rect(cx - WORLD_WIDTH / 2, 0, WORLD_WIDTH, WORLD_HEIGHT, 0, 0, 0, 0.5f);
+        rect(px - 2, py - 2, panelW + 4, panelH + 4, 0, 0, 0, 0.9f);
+        rect(px, py, panelW, panelH, 0.12f, 0.2f, 0.32f, 1f);
+
+        drawCentered("SHOP", cx, py + panelH - 12, 1.0f, Color.YELLOW);
+        drawText("Money: $" + money, px + 12, py + panelH - 14, 0.55f, Color.WHITE);
+
+        int itemCount = TICKET_INDEX + 1;
+        float rowH = 24;
+        float firstY = py + panelH - 46;
+
+        for (int i = 0; i < itemCount; i++) {
+
+            float y = firstY - i * rowH;
+            boolean selected = (i == shopCursor);
+
+            if (selected) {
+                rect(px + 8, y - 15, panelW - 16, rowH - 4, 1f, 1f, 1f, 0.15f);
+            }
+
+            String name;
+            String status;
+            Color statusColor = Color.WHITE;
+
+            if (i == TICKET_INDEX) {
+                name = "Ticket to a faraway place";
+                status = "$" + TICKET_PRICE;
+                if (money < TICKET_PRICE) statusColor = Color.LIGHT_GRAY;
+            } else {
+                name = ROD_NAMES[i];
+                if (rodLevel == i) {
+                    status = "EQUIPPED";
+                    statusColor = Color.GREEN;
+                } else if (rodOwned[i]) {
+                    status = "OWNED";
+                    statusColor = Color.CYAN;
+                } else {
+                    status = "$" + ROD_PRICES[i];
+                    if (money < ROD_PRICES[i]) statusColor = Color.LIGHT_GRAY;
+                }
+            }
+
+            drawText((selected ? "> " : "  ") + name, px + 16, y, 0.6f, selected ? Color.YELLOW : Color.WHITE);
+            drawText(status, px + panelW - 90, y, 0.6f, statusColor);
+        }
+
+        // คำอธิบายของที่เลือก
+        String desc = (shopCursor == TICKET_INDEX) ? TICKET_DESC : ROD_DESC[shopCursor];
+        drawText(desc, px + 12, py + 52, 0.5f, Color.LIGHT_GRAY);
+
+        // ข้อความแจ้งเตือน
+        if (messageTimer > 0) {
+            drawCentered(message, cx, py + 34, 0.6f, Color.ORANGE);
+        }
+
+        drawCentered("W/S: select   SPACE: buy / equip   Q: close", cx, py + 16, 0.5f, Color.WHITE);
+    }
+
+    // ฉากจบเกม
+    private void drawEnding() {
+
+        float cx = camera.position.x;
+
+        // จอค่อยๆ มืดลง
+        float a = MathUtils.clamp((stateTime - 1.5f) / 2.5f, 0f, 1f);
+        rect(cx - WORLD_WIDTH / 2, 0, WORLD_WIDTH, WORLD_HEIGHT, 0, 0, 0, a);
+
+        if (stateTime > 4.5f) {
+            drawCentered("You bought a ticket to a faraway fishing spot...", cx, 200, 0.7f, Color.WHITE);
+            drawCentered("Your journey on this lake ends here.", cx, 180, 0.6f, Color.LIGHT_GRAY);
+            drawCentered("Thanks for playing!", cx, 140, 1.4f, Color.YELLOW);
+            drawCentered("Fish caught: " + totalCaught, cx, 105, 0.6f, Color.WHITE);
+        }
+
+        if (stateTime > 6f && (int) (time * 2) % 2 == 0) {
+            drawCentered("Press SPACE to return to the title", cx, 50, 0.6f, Color.YELLOW);
+        }
+    }
+
     // วาดแถบมินิเกมที่ขอบขวาของจอ
     private void drawFightUI() {
 
@@ -678,7 +1065,7 @@ public class Main extends ApplicationAdapter {
         float barX = camera.position.x + WORLD_WIDTH / 2 - 44;
         float barY = 70;
 
-        float zoneSize = ZONE_SIZE[currentFishId];
+        float zoneSize = zoneSizeFor(currentFishId);
 
         // กรอบกับพื้นแถบ
         rect(barX - 2, barY - 2, barW + 4, barH + 4, 0, 0, 0, 0.8f);
@@ -740,6 +1127,9 @@ public class Main extends ApplicationAdapter {
         // พื้นหลัง
         batch.draw(background, 0, 0);
 
+        // ปลาว่ายในน้ำ (วาดหลังพื้นหลัง ก่อนท่าเรือและเรือ)
+        drawSwimFish();
+
         // ท่าเรือ (วาดทับพื้นหลัง ก่อนเรือ)
         batch.draw(dock, 0, 0);
 
@@ -750,6 +1140,18 @@ public class Main extends ApplicationAdapter {
         // หน้าเริ่มเกม: วาดทับฉาก แล้วจบการวาดแค่นี้ (ไม่ต้องแสดง HUD)
         if (state == State.MENU) {
             drawMenu();
+            batch.end();
+            return;
+        }
+
+        // ร้านค้า / ฉากจบ: วาดทับฉากแล้วจบการวาดแค่นี้
+        if (state == State.SHOP) {
+            drawShop();
+            batch.end();
+            return;
+        }
+        if (state == State.ENDING) {
+            drawEnding();
             batch.end();
             return;
         }
@@ -775,7 +1177,7 @@ public class Main extends ApplicationAdapter {
 
         // ป้ายบอกตอนอยู่ที่ท่าเรือ
         if (state == State.SAILING && atDock()) {
-            drawText("E: SELL", DOCK_MAX_X / 2f - 20, DOCK_SIGN_Y, 0.75f, Color.YELLOW);
+            drawText("E: SELL   Q: SHOP", DOCK_MAX_X / 2f - 40, DOCK_SIGN_Y, 0.75f, Color.YELLOW);
         }
 
         // มินิเกมสู้ปลา
@@ -789,10 +1191,11 @@ public class Main extends ApplicationAdapter {
 
         font.draw(batch, "Money: $" + money, hudLeft, hudTop);
         font.draw(batch, "Fish: " + fishCount + " ($" + fishValue + ")", hudLeft, hudTop - 14);
+        font.draw(batch, "Rod: " + ROD_NAMES[rodLevel], hudLeft, hudTop - 28);
 
         if (state == State.SAILING) {
             if (atDock()) {
-                font.draw(batch, "E: sell fish   SPACE: cast", hudLeft, 14);
+                font.draw(batch, "E: sell fish   Q: shop   SPACE: cast", hudLeft, 14);
             } else {
                 font.draw(batch, "A/D: move   SPACE: cast", hudLeft, 14);
             }
@@ -805,7 +1208,7 @@ public class Main extends ApplicationAdapter {
         }
 
         if (messageTimer > 0) {
-            font.draw(batch, message, camera.position.x - 40, hudTop - 40);
+            font.draw(batch, message, camera.position.x - 40, hudTop - 50);
         }
 
         batch.end();
@@ -833,6 +1236,7 @@ public class Main extends ApplicationAdapter {
         if (catchSound != null) catchSound.dispose();
         if (fightSound != null) fightSound.dispose();
         if (sellSound != null) sellSound.dispose();
+        if (engineSound != null) engineSound.dispose();
         if (bgm != null) bgm.dispose();
 
         for (Texture t : extraTextures) {
